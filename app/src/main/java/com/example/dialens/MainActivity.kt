@@ -48,6 +48,9 @@ import com.example.dialens.BuildConfig
 import androidx.compose.animation.core.*
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.text.KeyboardActions
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 // --- БАЗА ДАНИХ ТА МОДЕЛІ ---
 
 // 1. Опис таблиць (Сутності)
@@ -75,11 +78,11 @@ data class UserProfile(
 // 2. Інтерфейси доступу (DAO)
 @Dao
 interface MealDao {
-    @Query("SELECT * FROM meals ORDER BY timestamp DESC") // Додано сортування за часом
-    fun getAllMeals(): Flow<List<MealEntry>>
+    // Тепер ми просимо базу дати тільки ті страви, які були додані після певного часу
+    @Query("SELECT * FROM meals WHERE timestamp >= :startOfDay ORDER BY timestamp DESC")
+    fun getTodayMeals(startOfDay: Long): Flow<List<MealEntry>>
 
     @Insert suspend fun insertMeal(meal: MealEntry)
-
     @Delete suspend fun deleteMeal(meal: MealEntry)
 }
 
@@ -142,12 +145,28 @@ fun DiaLensMainScreen() {
     var consumedFats by remember { mutableFloatStateOf(0f) }
     var consumedCarbs by remember { mutableFloatStateOf(0f) }
 
-    var showProfileDialog by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("dialens_prefs", android.content.Context.MODE_PRIVATE) }
+
+    // Перевіряємо, чи заповнено профіль раніше (за замовчуванням false)
+    var showProfileDialog by remember {
+        mutableStateOf(!prefs.getBoolean("profile_filled", false))
+    }
 
     // 3. Зчитування даних
     val userProfileData by settingsDao.getUserProfile().collectAsState(initial = null)
-    val history by mealDao.getAllMeals().collectAsState(initial = emptyList())
+    // 1. Обчислюємо початок сьогоднішнього дня
+    val startOfToday = remember {
+        java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+    }
 
+// 2. Отримуємо історію тільки за сьогодні
+    val history by mealDao.getTodayMeals(startOfToday).collectAsState(initial = emptyList())
+    val snackbarHostState = remember { SnackbarHostState() } // Для красивих повідомлень
     // 4. Синхронізація статистики
     LaunchedEffect(history) {
         consumedKcal = history.sumOf { it.kcal.toDouble() }.toFloat()
@@ -156,11 +175,7 @@ fun DiaLensMainScreen() {
         consumedCarbs = history.sumOf { it.carbs.toDouble() }.toFloat()
     }
 
-    LaunchedEffect(userProfileData) {
-        if (userProfileData == null) showProfileDialog = true
-    }
-
-    val dailyKcalTarget = remember(userProfileData) {
+   val dailyKcalTarget = remember(userProfileData) {
         userProfileData?.customKcalLimit ?: userProfileData?.let { profile ->
             val bmr = (10f * profile.weight + 6.25f * profile.height - 5f * profile.age) +
                     (if (profile.gender == "Чоловік") 5f else -161f)
@@ -188,33 +203,36 @@ fun DiaLensMainScreen() {
     }
 
     fun analyzeMeal() {
+        // 1. ПЕРЕВІРКА: чи є інтернет взагалі?
+        if (!isNetworkAvailable(context)) {
+            resultText = "⚠️ Відсутній інтернет. Перевірте з'єднання та спробуйте ще раз."
+            return // Зупиняємо виконання, не витрачаючи ресурси
+        }
+
         if (capturedBitmap != null || additionalInfo.isNotEmpty()) {
             isLoading = true
             coroutineScope.launch {
                 try {
-                    // 1. ВИЗНАЧАЄМО ПРОМПТ ВСЕРЕДИНІ (щоб він бачив актуальні userProfile та additionalInfo)
                     val expertPrompt = """
-                        Ти — професійний дієтолог-ендокринолог. 
-                        Твій клієнт має профіль: $userProfile.
-    
-                        СТРУКТУРА ТВОЄЇ ВІДПОВІДІ:
-    
-                        1. Оціни склад страви: $additionalInfo. 
-                        Дай конкретну пораду щодо вживання цієї страви саме для профілю $userProfile. 
-                        Додай один цікавий факт про інгредієнти.
-    
-                        2. Розрахуй дані на порцію (~150-250г, якщо не вказано інше). 
-                        ВАЖЛИВО: Будь реалістичним. Звичайний обід — це 300-700 ккал. 
-                        Жодних чисел понад 2000 ккал для однієї страви!
-    
-                        3. ФОРМАТ КІНЦЕВОГО РЯДКА (СТРОГО):
-                        ---
-                        СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
-    
-                        Пиши тільки цілими числами. Не використовуй коми в цифрах.
-                    """.trimIndent()
+                    Ти — професійний дієтолог-ендокринолог. 
+                    Твій клієнт має профіль: $userProfile.
 
-                    // 2. ВИКЛИК МОДЕЛЕЙ
+                    СТРУКТУРА ТВОЄЇ ВІДПОВІДІ:
+                    1. Оціни склад страви: $additionalInfo. 
+                    Дай конкретну пораду щодо вживання цієї страви саме для профілю $userProfile. 
+                    Додай один цікавий факт про інгредієнти.
+
+                    2. Розрахуй дані на порцію (~150-250г, якщо не вказано інше). 
+                    ВАЖЛИВО: Будь реалістичним. Звичайний обід — це 300-700 ккал. 
+                    Жодних чисел понад 2000 ккал для однієї страви!
+
+                    3. ФОРМАТ КІНЦЕВОГО РЯДКА (СТРОГО):
+                    ---
+                    СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
+
+                    Пиши тільки цілими числами. Не використовуй коми в цифрах.
+                """.trimIndent()
+
                     val response = if (capturedBitmap != null) {
                         val bitmapToSend = resizeBitmap(capturedBitmap!!)
                         visionModel.generateContent(
@@ -228,9 +246,10 @@ fun DiaLensMainScreen() {
                     }
 
                     resultText = response.text ?: ""
-                    keyboardController?.hide() // Приховуємо клавіатуру після натискання Go/Search
+                    keyboardController?.hide()
                 } catch (e: Exception) {
-                    resultText = "Помилка: ${e.message}"
+                    // ОБРОБКА ПОМИЛОК МЕРЕЖІ (таймаут, обрив зв'язку)
+                    resultText = "Помилка зв'язку з сервером. Спробуйте пізніше."
                 } finally {
                     isLoading = false
                 }
@@ -426,141 +445,139 @@ fun DiaLensMainScreen() {
     }
 
 
-    if (showProfileDialog) ProfileDialog(userProfileData ?: UserProfile(), { showProfileDialog = false }, { coroutineScope.launch { settingsDao.saveProfile(it); showProfileDialog = false } })
+    if (showProfileDialog) {
+        ProfileDialog(
+            currentSettings = userProfileData ?: UserProfile(),
+            prefs = prefs,
+            onCloseDialog = { showProfileDialog = false },
+            onDismiss = { showProfileDialog = false },
+            onSave = { updatedProfile ->
+                coroutineScope.launch { settingsDao.saveProfile(updatedProfile) }
+            }
+        )
+    }
+
     if (showMealHistory) MealHistoryDialog(history, { showMealHistory = false }, { coroutineScope.launch { mealDao.deleteMeal(it) } }, {})
 }// <--- ТЕПЕР ФУНКЦІЯ DiaLensMainScreen ЗАКРИВАЄТЬСЯ ТУТ
 
 
 
-@Composable
-fun ProfileDialog(
-    currentSettings: UserProfile,
-    onDismiss: () -> Unit,
-    onSave: (UserProfile) -> Unit
-) {
-    var weight by remember { mutableStateOf(currentSettings.weight.toString()) }
-    var height by remember { mutableStateOf(currentSettings.height.toString()) }
-    var age by remember { mutableStateOf(currentSettings.age.toString()) }
-    var manualKcal by remember { mutableStateOf(currentSettings.customKcalLimit?.toString() ?: "") }
-    var gender by remember { mutableStateOf(currentSettings.gender) }
+    @Composable
+    fun ProfileDialog(
+        currentSettings: UserProfile,
+        prefs: android.content.SharedPreferences, // Кома в кінці обов'язкова!
+        onCloseDialog: () -> Unit,
+        onDismiss: () -> Unit,
+        onSave: (UserProfile) -> Unit
+    ) {
+        var weight by remember { mutableStateOf(currentSettings.weight.toString()) }
+        var height by remember { mutableStateOf(currentSettings.height.toString()) }
+        var age by remember { mutableStateOf(currentSettings.age.toString()) }
+        var manualKcal by remember { mutableStateOf(currentSettings.customKcalLimit?.toString() ?: "") }
+        var gender by remember { mutableStateOf(currentSettings.gender) }
 
-    val inputColors = OutlinedTextFieldDefaults.colors(
-        focusedBorderColor = Color(0xFF4CAF50),
-        unfocusedBorderColor = Color(0xFF4CAF50).copy(alpha = 0.5f),
-        focusedLabelColor = Color(0xFF4CAF50),
-        cursorColor = Color(0xFF4CAF50)
-    )
+        val inputColors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF4CAF50),
+            unfocusedBorderColor = Color(0xFF4CAF50).copy(alpha = 0.5f),
+            focusedLabelColor = Color(0xFF4CAF50),
+            cursorColor = Color(0xFF4CAF50)
+        )
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier.padding(24.dp),
-        confirmButton = {
-            Button(
-                onClick = {
-                    onSave(currentSettings.copy(
-                        weight = weight.toIntOrNull() ?: 75,
-                        height = height.toIntOrNull() ?: 175,
-                        age = age.toIntOrNull() ?: 30,
-                        gender = gender,
-                        customKcalLimit = manualKcal.toFloatOrNull()
-                    ))
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-            ) {
-                Text("ЗБЕРЕГТИ", fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        },
-        title = {
-            Text("Налаштування профілю", fontSize = 22.sp, fontWeight = FontWeight.Black, color = Color(0xFF4CAF50))
-        },
-        text = {
-            // BOX дозволяє кнопці "літати" поверх Column
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier.padding(24.dp),
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSave(currentSettings.copy(
+                            weight = weight.toIntOrNull() ?: 75,
+                            height = height.toIntOrNull() ?: 175,
+                            age = age.toIntOrNull() ?: 30,
+                            gender = gender,
+                            customKcalLimit = manualKcal.toFloatOrNull()
+                        ))
+                        prefs.edit().putBoolean("profile_filled", true).apply()
+                        onCloseDialog()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                 ) {
-                    // ПЕРЕМИКАЧ СТАТІ
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    Text("ЗБЕРЕГТИ", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            title = {
+                Text("Налаштування профілю", fontSize = 22.sp, fontWeight = FontWeight.Black, color = Color(0xFF4CAF50))
+            },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        listOf("Чоловік", "Жінка").forEach { item ->
-                            val isSelected = gender == item
-                            Button(
-                                onClick = { gender = item },
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isSelected) Color(0xFF2E7D32) else Color(0xFF424242)
-                                )
-                            ) {
-                                Text(item, fontWeight = FontWeight.Bold, color = Color.White)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            listOf("Чоловік", "Жінка").forEach { item ->
+                                val isSelected = gender == item
+                                Button(
+                                    onClick = { gender = item },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) Color(0xFF2E7D32) else Color(0xFF424242)
+                                    )
+                                ) {
+                                    Text(item, fontWeight = FontWeight.Bold, color = Color.White)
+                                }
                             }
                         }
+
+                        OutlinedTextField(
+                            value = weight, onValueChange = { weight = it },
+                            label = { Text("Вага (кг)") }, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            colors = inputColors
+                        )
+
+                        OutlinedTextField(
+                            value = height, onValueChange = { height = it },
+                            label = { Text("Зріст (см)") }, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            colors = inputColors
+                        )
+
+                        OutlinedTextField(
+                            value = age, onValueChange = { age = it },
+                            label = { Text("Вік") }, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            colors = inputColors
+                        )
+
+                        HorizontalDivider(thickness = 1.dp, color = Color.Gray.copy(0.3f))
+
+                        OutlinedTextField(
+                            value = manualKcal, onValueChange = { manualKcal = it },
+                            label = { Text("Норма від лікаря (ккал)") }, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                            colors = inputColors
+                        )
                     }
 
-                    OutlinedTextField(
-                        value = weight, onValueChange = { weight = it },
-                        label = { Text("Вага (кг)") }, modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done),
-                        colors = inputColors
-                    )
-
-                    OutlinedTextField(
-                        value = height, onValueChange = { height = it },
-                        label = { Text("Зріст (см)") }, modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done),
-                        colors = inputColors
-                    )
-
-                    OutlinedTextField(
-                        value = age, onValueChange = { age = it },
-                        label = { Text("Вік") }, modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done),
-                        colors = inputColors
-                    )
-
-                    HorizontalDivider(thickness = 1.dp, color = Color.Gray.copy(0.3f))
-
-                    OutlinedTextField(
-                        value = manualKcal, onValueChange = { manualKcal = it },
-                        label = { Text("Норма від лікаря (ккал)") }, modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done),
-                        colors = inputColors
-                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.align(Alignment.TopEnd).offset(x = 12.dp, y = (-50).dp)
+                    ) {
+                        Icon(Icons.Default.Close, "Закрити", tint = Color(0xFF4CAF50))
+                    }
                 }
-
-                // КНОПКА ЗАКРИТТЯ (Тепер вона на рівні з Column всередині Box)
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = 12.dp, y = (-50).dp) // Підняв вище, щоб не перекривала заголовок
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Закрити",
-                        tint = Color(0xFF4CAF50)
-                    )
-                }
-            } // ТУТ ЗАКРИВАЄТЬСЯ BOX
-        }, // ТУТ ЗАКРИВАЄТЬСЯ TEXT
-        containerColor = if (isSystemInDarkTheme()) Color(0xFF1A1A1A) else Color.White,
-        shape = RoundedCornerShape(28.dp)
-    )
-}
+            },
+            containerColor = if (isSystemInDarkTheme()) Color(0xFF1A1A1A) else Color.White,
+            shape = RoundedCornerShape(28.dp)
+        )
+    }
 @Composable
 fun StatRow(label: String, value: Float, target: Float, color: Color, textColor: Color) {
     Column(Modifier.padding(vertical = 4.dp)) {
@@ -568,7 +585,13 @@ fun StatRow(label: String, value: Float, target: Float, color: Color, textColor:
             Text(label, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = textColor)
             Text("${value.toInt()}/${target.toInt()}", fontSize = 13.sp, color = textColor)
         }
-        LinearProgressIndicator(progress = { (value / target).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)), color = color, trackColor = color.copy(alpha = 0.2f))
+        LinearProgressIndicator(
+            progress = { (value / target).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)),
+            // Колір стає червоним, якщо ліміт перевищено
+            color = if (value > target) Color.Red else color,
+            trackColor = color.copy(alpha = 0.2f)
+        )
     }
 }
 
@@ -749,4 +772,10 @@ fun resizeBitmap(source: android.graphics.Bitmap, maxLength: Int = 1024): androi
         targetWidth = (maxLength * aspectRatio).toInt()
     }
     return android.graphics.Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+}
+fun isNetworkAvailable(context: Context): Boolean {
+    val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val network = connectivityManager.activeNetwork ?: return false
+    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
