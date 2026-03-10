@@ -51,6 +51,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import androidx.compose.ui.graphics.Brush
 // --- БАЗА ДАНИХ ТА МОДЕЛІ ---
 
 // 1. Опис таблиць (Сутності)
@@ -207,6 +208,11 @@ fun DiaLensMainScreen() {
         if (!isNetworkAvailable(context)) {
             resultText = "⚠️ Відсутній інтернет. Перевірте з'єднання та спробуйте ще раз."
             return // Зупиняємо виконання, не витрачаючи ресурси
+        }
+
+        if (capturedBitmap == null && additionalInfo.isEmpty()) {
+            cameraLauncher.launch() // Викликаємо лаунчер камери
+            return // Виходимо, щоб не запускати аналіз порожнечі
         }
 
         if (capturedBitmap != null || additionalInfo.isNotEmpty()) {
@@ -397,14 +403,17 @@ fun DiaLensMainScreen() {
 
         // ГОЛОВНА КНОПКА (ЗАЛИШИЛАСЬ ЗНИЗУ)
         Button(
-            onClick = { analyzeMeal() }, // ПРОСТО ВИКЛИК ФУНКЦІЇ
+            onClick = { analyzeMeal() },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(16.dp)
                 .fillMaxWidth()
-                .height(72.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                .height(64.dp), // Трохи зменшив висоту для елегантності
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2E7D32), // Твій стабільний зелений
+                contentColor = Color.White
+            ),
             elevation = ButtonDefaults.buttonElevation(8.dp)
         ) {
             if (isLoading) {
@@ -414,9 +423,8 @@ fun DiaLensMainScreen() {
                 Spacer(Modifier.width(12.dp))
                 Text(
                     "АНАЛІЗУВАТИ",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color.White
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
