@@ -58,6 +58,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.compose.foundation)
     val roomVersion = "2.7.0-alpha13" // Або "2.7.0-beta01", якщо вже доступна
 
     implementation("androidx.room:room-runtime:$roomVersion")
@@ -66,6 +67,8 @@ dependencies {
 
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("androidx.compose.material:material-icons-extended:1.7.0")
+
 
     val camerax_version = "1.3.1"
     implementation("androidx.compose.material:material-icons-extended")
