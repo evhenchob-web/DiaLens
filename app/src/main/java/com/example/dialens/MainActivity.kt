@@ -1,5 +1,6 @@
 package com.example.dialens
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -15,10 +16,7 @@ import androidx.activity.result.launch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +41,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Adjust
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -51,6 +48,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -80,7 +78,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -100,6 +97,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -120,19 +118,18 @@ import androidx.room.Upsert
 import com.google.ai.client.generativeai.GenerativeModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Info
+import java.util.Locale
 
 // --- БАЗА ДАНИХ ТА МОДЕЛІ ---
 
 @Entity(tableName = "user_profile")
 data class userProfile(
     @PrimaryKey val id: Int = 0,
-    val gender: String = "Чоловік",
+    val gender: String = "Male",        // Було "Чоловік" -> Стало "Male"
     val weight: Float = 0f,
     val height: Float = 0f,
     val age: Int = 0,
-    val profileType: String = "Стандарт",
+    val profileType: String = "Standard", // Було "Стандарт" -> Стало "Standard"
     val targetKcal: Float = 0f,
     val targetProteins: Float = 0f,
     val targetFats: Float = 0f,
@@ -248,11 +245,13 @@ fun DiaLensMainScreen(
 
     // Перевіряємо, чи заповнено профіль раніше (за замовчуванням false)
     // МАЄ БУТИ САМЕ ТАК:
-    var userProfile by remember { mutableStateOf("Стандарт") }
+    // Тепер тут зберігається технічний ключ: "Standard", "Athlete" або "Diabetic"
+    var userProfile by remember { mutableStateOf("Standard") }
+
     LaunchedEffect(userProfileData) {
         userProfileData?.let {
             if (it.profileType.isNotEmpty()) {
-                userProfile = it.profileType
+                userProfile = it.profileType // Тут буде технічне значення з бази
             }
         }
     }
@@ -318,11 +317,10 @@ fun DiaLensMainScreen(
             }
         }
 
-    fun analyzeMeal() {
-        // 1. ПЕРЕВІРКА: чи є інтернет взагалі?
+    fun analyzeMeal(context: Context) {
         if (!isNetworkAvailable(context)) {
-            resultText = "⚠️ Відсутній інтернет. Перевірте з'єднання та спробуйте ще раз."
-            return // Зупиняємо виконання, не витрачаючи ресурси
+            resultText = context.getString(R.string.error_no_internet)
+            return
         }
 
         if (capturedBitmap == null && additionalInfo.isEmpty()) {
@@ -334,20 +332,28 @@ fun DiaLensMainScreen(
             isLoading = true
             coroutineScope.launch {
                 try {
+                    val currentLanguage = Locale.getDefault().language // Визначаємо мову телефону
+                    val languageInstruction = if (currentLanguage == "uk") "Пиши відповідь українською." else "Write the response in English."
+                    val profileContext = when (userProfile) {
+                        "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
+                        "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
+                        else -> "Стандартний (збалансоване харчування)"
+                    }
+
                     val expertPrompt = """
                         Ти — професійний дієтолог-ендокринолог. 
-                        Клієнт має профіль: $userProfile.
+                        Клієнт має профіль: $profileContext.
 
                         ЗАВДАННЯ:
                         1. Проаналізуй страву: "$additionalInfo".
                         2. Якщо в описі страви вказана конкретна вага (наприклад, 100г) — розрахуй КБЖВ СУВОРО на цю вагу. 
                             Якщо вага НЕ вказана — бери середню порцію 250г.
-                        3. Дай коротку пораду щодо вживання цієї страви для профілю $userProfile та один цікавий факт.
+                        3. Дай коротку пораду щодо вживання цієї страви для цього профілю та один цікавий факт.
 
                         ТЕХНІЧНІ ВИМОГИ (НЕ виводь ці заголовки у відповіді):
                         - Будь реалістичним (обід 300-700 ккал, не більше 2000 ккал на страву).
                         - Пиши тільки цілими числами, без ком.
-    
+
                         В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК (без заголовків):
                         ---
                         СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
@@ -368,8 +374,8 @@ fun DiaLensMainScreen(
                     resultText = response.text ?: ""
                     keyboardController?.hide()
                 } catch (e: Exception) {
-                    // ОБРОБКА ПОМИЛОК МЕРЕЖІ (таймаут, обрив зв'язку)
-                    resultText = "Помилка зв'язку з сервером. Спробуйте пізніше."
+                    // ВИКОРИСТОВУЄМО КОНСТАНТУ З РЕСУРСІВ
+                    resultText = context.resources.getString(R.string.error_api)
                 } finally {
                     isLoading = false
                 }
@@ -460,7 +466,7 @@ fun DiaLensMainScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 12.dp)
-                        .clickable { showQuickProfileSelection = true }, // ТЕПЕР ТУТ ВИКЛИК ДІАЛОГУ
+                        .clickable { showQuickProfileSelection = true },
                     color = Color.White.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(800.dp),
                     border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f))
@@ -475,8 +481,17 @@ fun DiaLensMainScreen(
                                 .background(Color(0xFF4CAF50), CircleShape)
                         )
                         Spacer(Modifier.width(8.dp))
+
+                        // МАПІНГ: Використовуємо твою змінну userProfile
+                        val displayProfileName = when (userProfile) {
+                            "Standard" -> stringResource(R.string.profile_label_standard)
+                            "Athlete" -> stringResource(R.string.profile_label_athlete)
+                            "Diabetic" -> stringResource(R.string.profile_label_diabetic)
+                            else -> userProfile // На випадок, якщо в базі порожньо
+                        }
+
                         Text(
-                            text = userProfile.uppercase(),
+                            text = displayProfileName.uppercase(), // Тепер тут буде "СТАНДАРТ"
                             fontSize = 18.sp,
                             color = Color.White,
                             fontWeight = FontWeight.ExtraBold,
@@ -502,23 +517,23 @@ fun DiaLensMainScreen(
                 ) {
                     Column(Modifier.padding(24.dp)) {
                         when (userProfile) {
-                            "Спортсмен" -> {
+                            "Athlete" -> { // ТЕХНІЧНА НАЗВА
                                 StatRow(
-                                    "Білки (г)",
+                                    stringResource(R.string.stat_proteins),
                                     consumedProteins,
                                     proteinsGoal,
                                     Color(0xFF2196F3),
                                     mainTextColor
                                 )
                                 StatRow(
-                                    "Жири (г)",
+                                    stringResource(R.string.stat_fats),
                                     consumedFats,
                                     fatsGoal,
                                     Color(0xFFFFC107),
                                     mainTextColor
                                 )
                                 StatRow(
-                                    "Вуглеводи (г)",
+                                    stringResource(R.string.stat_carbs),
                                     consumedCarbs,
                                     carbsGoal,
                                     Color(0xFF4CAF50),
@@ -526,16 +541,16 @@ fun DiaLensMainScreen(
                                 )
                             }
 
-                            "Діабетик" -> {
+                            "Diabetic" -> { // ТЕХНІЧНА НАЗВА
                                 StatRow(
-                                    "Хлібні одиниці (ХО)",
+                                    stringResource(R.string.stat_ho),
                                     consumedCarbs / 12f,
                                     hoGoal,
                                     Color(0xFF4CAF50),
                                     mainTextColor
                                 )
                                 StatRow(
-                                    "Калорії (ккал)",
+                                    stringResource(R.string.stat_kcal),
                                     consumedKcal,
                                     dailyKcalTarget,
                                     Color(0xFFFF9800),
@@ -543,16 +558,16 @@ fun DiaLensMainScreen(
                                 )
                             }
 
-                            else -> {
+                            else -> { // Standard
                                 StatRow(
-                                    "Калорії (ккал)",
+                                    stringResource(R.string.stat_kcal),
                                     consumedKcal,
                                     dailyKcalTarget,
                                     Color(0xFFFF9800),
                                     mainTextColor
                                 )
                                 StatRow(
-                                    "Білки (г)",
+                                    stringResource(R.string.stat_proteins),
                                     consumedProteins,
                                     proteinsGoal,
                                     Color(0xFF2196F3),
@@ -570,7 +585,10 @@ fun DiaLensMainScreen(
                     value = additionalInfo,
                     onValueChange = { additionalInfo = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Додай опис (напр. 'борщ')") },
+                    placeholder = {
+                        // Замінюємо "Додай опис..." на ресурс
+                        Text(stringResource(R.string.input_placeholder))
+                    },
                     shape = RoundedCornerShape(16.dp),
                     keyboardOptions = KeyboardOptions(
                         imeAction = ImeAction.Search
@@ -579,7 +597,7 @@ fun DiaLensMainScreen(
                     // 2. Визначаємо, що робити при натисканні на цю лупу
                     keyboardActions = KeyboardActions(
                         onSearch = {
-                            analyzeMeal() // Запускаємо аналіз
+                            analyzeMeal(context) // Запускаємо аналіз
                             keyboardController?.hide() // Ховаємо клавіатуру
                         }
                     ),
@@ -691,12 +709,13 @@ fun DiaLensMainScreen(
                                         Icon(
                                             imageVector = Icons.Default.Lightbulb,
                                             contentDescription = null,
-                                            tint = Color(0xFF4CAF50), // Твій зелений
+                                            tint = Color(0xFF4CAF50),
                                             modifier = Modifier.size(20.dp)
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Text(
-                                            text = "Для точного визначення порції помістіть долоню в кадр поруч зі стравою",
+                                            // Замінюємо хардкод на ключ із нашого списку
+                                            text = stringResource(R.string.camera_tip),
                                             color = Color.Gray,
                                             fontSize = 13.sp,
                                             lineHeight = 16.sp
@@ -735,7 +754,10 @@ fun DiaLensMainScreen(
                                         }
                                     }
                                     Spacer(Modifier.height(12.dp))
-                                    Text("Натисніть для фото або галереї", color = Color.Gray)
+                                    Text(
+                                        text = stringResource(R.string.camera_hint),
+                                        color = Color.Gray
+                                    )
                                 }
                             }
                         }
@@ -746,7 +768,7 @@ fun DiaLensMainScreen(
 
 // ТЕПЕР КНОПКА ЗНАХОДИТЬСЯ ПРЯМО В BOX
         Button(
-            onClick = { analyzeMeal() },
+            onClick = { analyzeMeal(context) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 16.dp)
@@ -766,7 +788,7 @@ fun DiaLensMainScreen(
                 Icon(Icons.Default.AutoAwesome, null, tint = Color.White)
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "АНАЛІЗУВАТИ",
+                    text = stringResource(R.string.analyze_button),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -844,7 +866,12 @@ fun DiaLensMainScreen(
             ) {
                 Icon(Icons.Default.AutoAwesome, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(40.dp))
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Порада дієтолога", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, color = Color(0xFF2E7D32))
+                Text(
+                    text = stringResource(R.string.tip_expert), // Замінили хардкод
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 20.sp,
+                    color = Color(0xFF2E7D32)
+                )
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // ВИПРАВЛЕНО: використовуємо resultText замість response
@@ -872,46 +899,52 @@ fun QuickProfileSelectionDialog(
         onDismissRequest = onDismissRequest,
         title = {
             Text(
-                "Оберіть режим",
+                text = stringResource(R.string.select_mode), // "Оберіть режим"
                 fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFF2E7D32) // Темно-зелений заголовок
+                color = Color(0xFF2E7D32)
             )
         },
         text = {
             Column {
-                val allOptions = listOf("Стандарт", "Спортсмен", "Діабетик")
-                allOptions.forEach { optionName ->
+                // Мапінг: технічний ключ -> ресурс рядка для відображення
+                val optionsMap = mapOf(
+                    "Standard" to R.string.profile_label_standard,
+                    "Athlete" to R.string.profile_label_athlete,
+                    "Diabetic" to R.string.profile_label_diabetic
+                )
+
+                optionsMap.forEach { (technicalKey, labelRes) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onProfileChosen(optionName) }
-                            .padding(vertical = 8.dp), // Трохи менший відступ для компактності
+                            .clickable { onProfileChosen(technicalKey) }
+                            .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
-                            selected = (optionName == currentActiveProfile),
-                            onClick = null, // Клік обробляється в Row
+                            selected = (technicalKey == currentActiveProfile),
+                            onClick = null,
                             colors = RadioButtonDefaults.colors(
-                                selectedColor = Color(0xFF4CAF50), // Зелена крапка при виборі
+                                selectedColor = Color(0xFF4CAF50),
                                 unselectedColor = Color.Gray
                             )
                         )
                         Text(
-                            text = optionName,
+                            text = stringResource(labelRes), // Відображаємо перекладений текст
                             modifier = Modifier.padding(start = 12.dp),
                             fontSize = 18.sp,
-                            fontWeight = if (optionName == currentActiveProfile) FontWeight.Bold else FontWeight.Normal
+                            fontWeight = if (technicalKey == currentActiveProfile) FontWeight.Bold else FontWeight.Normal,
+                            color = Color.White // Додав білий колір, оскільки фон діалогу темний
                         )
                     }
                 }
             }
         },
         confirmButton = {
-            // Використовуємо TextButton для "Скасувати" з червоним кольором
             TextButton(onClick = onDismissRequest) {
                 Text(
-                    "СКАСУВАТИ",
-                    color = Color(0xFFD32F2F), // Червоний колір
+                    text = stringResource(R.string.btn_cancel), // "СКАСУВАТИ"
+                    color = Color(0xFFD32F2F),
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -919,6 +952,7 @@ fun QuickProfileSelectionDialog(
     )
 }
 
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun ProfileDialog(
     currentSettings: userProfile,
@@ -942,25 +976,38 @@ fun ProfileDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Мій Профіль", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.my_profile), color = Color.White, fontWeight = FontWeight.Bold)
                 IconButton(onClick = onCloseDialog) {
-                    Icon(Icons.Default.Close, contentDescription = "Закрити", tint = Color.Gray)
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.btn_close),
+                        tint = Color.Gray
+                    )
                 }
             }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                ProfileSelectionRow("Стать", listOf("Чоловік", "Жінка"), gender) { gender = it }
-
+                // Використовуємо технічні ключі "Male", "Female" для внутрішньої логіки
+                // Усередині Column в ProfileDialog
+                ProfileSelectionRow(
+                    label = stringResource(R.string.gender_label),
+                    options = listOf("Male", "Female"),
+                    selected = gender, // ВИПРАВЛЕНО: було selectedOption
+                    onSelect = { gender = it }
+                )
                 val colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFF4CAF50)
+                    focusedBorderColor = Color(0xFF4CAF50),
+                    unfocusedBorderColor = Color.Gray,
+                    focusedLabelColor = Color(0xFF4CAF50),
+                    unfocusedLabelColor = Color.Gray
                 )
 
                 OutlinedTextField(
                     value = age, onValueChange = { age = it },
-                    label = { Text("Вік") },
+                    label = { Text(stringResource(R.string.age)) },
                     modifier = Modifier.fillMaxWidth(), colors = colors,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
@@ -968,13 +1015,13 @@ fun ProfileDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = weight, onValueChange = { weight = it },
-                        label = { Text("Вага (кг)") },
+                        label = { Text(stringResource(R.string.weight)) },
                         modifier = Modifier.weight(1f), colors = colors,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
                     OutlinedTextField(
                         value = height, onValueChange = { height = it },
-                        label = { Text("Зріст (см)") },
+                        label = { Text(stringResource(R.string.height)) },
                         modifier = Modifier.weight(1f), colors = colors,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
@@ -983,7 +1030,7 @@ fun ProfileDialog(
         },
         dismissButton = {
             TextButton(onClick = onCloseDialog) {
-                Text("Скасувати", color = Color.Gray)
+                Text(stringResource(R.string.btn_cancel), color = Color.Gray)
             }
         },
         confirmButton = {
@@ -994,19 +1041,21 @@ fun ProfileDialog(
                     val a = age.toIntOrNull() ?: 0
 
                     if (w > 0 && h > 0 && a > 0) {
+                        // profileType має бути доступним у цьому scope
                         val goals = calculateGoals(profileType, gender, w, h, a)
 
-                        // 1. ПОВІДОМЛЯЄМО ПРОФІЛЬ, ЩО ВІН ЗАПОВНЕНИЙ (Ось цей рядок я пропустив)
                         context.getSharedPreferences("dialens_prefs", Context.MODE_PRIVATE)
                             .edit()
                             .putBoolean("profile_filled", true)
                             .apply()
 
-                        // 2. ЗБЕРІГАЄМО В БАЗУ ДАНИХ
                         onSave(
                             currentSettings.copy(
-                                gender = gender, profileType = profileType,
-                                weight = w, height = h, age = a,
+                                gender = gender,
+                                profileType = profileType,
+                                weight = w,
+                                height = h,
+                                age = a,
                                 targetKcal = goals.kcal,
                                 targetProteins = goals.proteins,
                                 targetFats = goals.fats,
@@ -1015,27 +1064,28 @@ fun ProfileDialog(
                             )
                         )
 
+                        // ВИПРАВЛЕНО: використання ресурсу для Toast
                         android.widget.Toast.makeText(
                             context,
-                            "Дані оновлено!",
+                            context.getString(R.string.toast_updated),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                         onCloseDialog()
                     } else {
                         android.widget.Toast.makeText(
                             context,
-                            "Заповніть усі поля",
+                            context.getString(R.string.toast_fill_all),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     }
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF4CAF50),
-                    contentColor = Color.White
+                    contentColor = Color.White // Білий колір тексту повернуто
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp) // Закруглення 12.dp повернуто
             ) {
-                Text("Зберегти зміни")
+                Text(stringResource(R.string.btn_save))
             }
         }
     )
@@ -1048,34 +1098,43 @@ fun ProfileSelectionRow(
     selected: String,
     onSelect: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column {
         Text(label, color = Color.Gray, fontSize = 14.sp)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             options.forEach { option ->
-                val isSelected = selected == option
+                val isSelected = option == selected
+
+                // МАПІНГ: перетворюємо технічний ключ на перекладений текст
+                val displayLabel = when (option) {
+                    "Standard" -> stringResource(R.string.profile_label_standard)
+                    "Athlete" -> stringResource(R.string.profile_label_athlete)
+                    "Diabetic" -> stringResource(R.string.profile_label_diabetic)
+                    "Male" -> stringResource(R.string.gender_male)
+                    "Female" -> stringResource(R.string.gender_female)
+                    else -> option
+                }
+
                 Surface(
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp)
                         .clickable { onSelect(option) },
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isSelected) Color(0xFF4CAF50) else Color(0xFF2C2E31),
-                    border = if (isSelected) null else BorderStroke(
-                        1.dp,
-                        Color.Gray.copy(alpha = 0.2f)
-                    )
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) Color(0xFF4CAF50) else Color(0xFF252525),
+                    border = if (isSelected) null else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f))
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            option,
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    Text(
+                        text = displayLabel, // ТЕПЕР ТУТ ПЕРЕКЛАДЕНИЙ ТЕКСТ
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        textAlign = TextAlign.Center,
+                        color = if (isSelected) Color.White else Color.Gray,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp // Трохи зменшив, щоб довгі слова (Спортсмен) влазили
+                    )
                 }
             }
         }
@@ -1109,10 +1168,10 @@ fun StatRow(label: String, value: Float, target: Float, color: Color, textColor:
 @Composable
 fun DetailedResultView(
     text: String,
-    userProfile: String,
+    userProfile: String, // Тут тепер прилітає "Diabetic", "Athlete" або "Standard"
     textColor: Color,
-    mealDao: MealDao, // Додано
-    coroutineScope: kotlinx.coroutines.CoroutineScope, // Додано
+    mealDao: MealDao,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
     onConfirm: (Float, Float, Float, Float) -> Unit
 ) {
     val kcal = parseVal(text, "ККАЛ")
@@ -1121,12 +1180,10 @@ fun DetailedResultView(
     val v = parseVal(text, "ВУГЛЕВОДИ")
     val dishName = text.substringAfter("СТРАВА:", "Страва").substringBefore("|").trim()
 
-    // Оновлена обробка опису (видаляємо технічні символи)
     val fullDescription = text.substringBefore("СТРАВА:")
         .replace("**", "").replace("##", "").replace("*", "•")
         .trim()
 
-    // Стан для кнопки "Більше цікавого"
     var isExpanded by remember { mutableStateOf(false) }
 
     Column(
@@ -1142,7 +1199,6 @@ fun DetailedResultView(
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        // Картка з текстом та кнопкою розгортання
         Surface(
             color = if (isSystemInDarkTheme()) Color(0xFF252525) else Color(0xFFF5F5F5),
             shape = RoundedCornerShape(12.dp),
@@ -1150,15 +1206,16 @@ fun DetailedResultView(
         ) {
             Column(Modifier.padding(12.dp)) {
                 Text(
-                    text = if (isExpanded) fullDescription else fullDescription.take(130)
-                        .substringBeforeLast(" ") + "...",
+                    text = if (isExpanded || fullDescription.length <= 130) fullDescription
+                    else fullDescription.take(130).substringBeforeLast(" ") + "...",
                     color = textColor.copy(alpha = 0.9f),
                     fontSize = 14.sp,
                     lineHeight = 18.sp
                 )
 
                 Text(
-                    text = if (isExpanded) "Згорнути" else "Більше цікавого про страву",
+                    text = if (isExpanded) stringResource(R.string.collapse)
+                    else stringResource(R.string.more_info),
                     color = Color(0xFF4CAF50),
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
@@ -1177,30 +1234,38 @@ fun DetailedResultView(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
+                // Використовуємо формат %1$d з strings.xml
                 Text(
-                    "🔥 Енергія: ${kcal.toInt()} ккал",
+                    text = stringResource(R.string.energy_label, kcal.toInt()),
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 18.sp,
                     color = textColor
                 )
+                // Використовуємо формат Б: %1$dg | Ж: %2$dg | В: %3$dg
                 Text(
-                    "Б: ${b.toInt()}г | Ж: ${j.toInt()}г | В: ${v.toInt()}г",
+                    text = stringResource(R.string.macros_summary, b.toInt(), j.toInt(), v.toInt()),
                     color = textColor.copy(alpha = 0.7f)
                 )
             }
 
-            if (userProfile == "Діабетик") {
+            // ПЕРЕВІРКА: тепер порівнюємо з "Diabetic"
+            if (userProfile == "Diabetic") {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     val ho = v / 12f
                     Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
                         Text(
-                            text = String.format("%.1f ХО", ho),
+                            // Виводимо число ХО
+                            text = String.format("%.1f", ho) + " " + stringResource(R.string.stat_ho).filter { it.isLetter() },
                             color = Color(0xFF2E7D32),
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
-                    Text("Хлібні одиниці", fontSize = 10.sp, color = Color.Gray)
+                    Text(
+                        text = stringResource(R.string.stat_ho),
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
                 }
             }
         }
@@ -1230,7 +1295,11 @@ fun DetailedResultView(
         ) {
             Icon(Icons.Default.AddCircleOutline, null, tint = Color.White)
             Spacer(Modifier.width(8.dp))
-            Text("ЗБЕРЕГТИ В ЖУРНАЛ", fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+                text = stringResource(R.string.save_to_log),
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
         }
     }
 }
@@ -1247,13 +1316,14 @@ fun MealHistoryDialog(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Default.Event, // Стандартна іконка календаря
+                    imageVector = Icons.Default.Event,
                     contentDescription = null,
                     tint = Color(0xFF2E7D32)
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = "Історія за сьогодні",
+                    // Замінено: "Історія за сьогодні"
+                    text = stringResource(R.string.history_today),
                     fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFF2E7D32)
                 )
@@ -1263,7 +1333,8 @@ fun MealHistoryDialog(
             Box(modifier = Modifier.heightIn(max = 420.dp)) {
                 if (history.isEmpty()) {
                     Text(
-                        "Сьогодні ще не було записів",
+                        // Замінено: "Сьогодні ще не було записів"
+                        text = stringResource(R.string.no_entries_today),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(24.dp),
@@ -1271,11 +1342,9 @@ fun MealHistoryDialog(
                         color = Color.Gray
                     )
                 } else {
-                    // ВАЖЛИВО: переконайся, що є імпорт: androidx.compose.foundation.lazy.items
                     LazyColumn {
                         items(history) { meal ->
                             MealHistoryItem(meal = meal, onDelete = onDelete)
-                            // Замість HorizontalDivider використовуємо Divider
                             Divider(
                                 color = Color.Gray.copy(alpha = 0.2f),
                                 thickness = 0.5.dp,
@@ -1289,16 +1358,15 @@ fun MealHistoryDialog(
         confirmButton = {
             TextButton(onClick = onClose) {
                 Text(
-                    "ЗАКРИТИ",
+                    // Замінено: "ЗАКРИТИ"
+                    text = stringResource(R.string.btn_close),
                     color = Color(0xFFD32F2F),
                     fontWeight = FontWeight.Bold
                 )
             }
         }
     )
-}
-
-@Composable
+}@Composable
 fun MealHistoryItem(meal: MealEntry, onDelete: (MealEntry) -> Unit) {
     Row(
         modifier = Modifier
@@ -1307,20 +1375,37 @@ fun MealHistoryItem(meal: MealEntry, onDelete: (MealEntry) -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(meal.dishName, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(
+                text = meal.dishName,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = Color.White // Додав для кращої читаємості в темній темі
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Default.Adjust, // Заміна вогнику на стандартну точку/мітку
+                    imageVector = Icons.Default.Adjust,
                     contentDescription = null,
                     tint = Color(0xFFFF9800),
                     modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(4.dp))
-                Text("${meal.kcal.toInt()} ккал", fontSize = 14.sp, color = Color.Gray)
+
+                // ВИПРАВЛЕННЯ: Використовуємо energy_label, але витягуємо тільки "ккал"
+                // або просто підставляємо число в шаблон
+                Text(
+                    text = stringResource(R.string.energy_label, meal.kcal.toInt()).replace("🔥 ", ""),
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
             }
         }
         IconButton(onClick = { onDelete(meal) }) {
-            Icon(Icons.Default.Delete, "Видалити", tint = Color(0xFFD32F2F).copy(alpha = 0.7f))
+            Icon(
+                imageVector = Icons.Default.Delete,
+                // ВИПРАВЛЕННЯ: опис кнопки з ресурсів
+                contentDescription = stringResource(R.string.back_button_desc), // Можна використати інший ключ, якщо є
+                tint = Color(0xFFD32F2F).copy(alpha = 0.7f)
+            )
         }
     }
 }
@@ -1335,9 +1420,24 @@ fun MealItemRow(meal: MealEntry, onDelete: (MealEntry) -> Unit, onEdit: (MealEnt
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(meal.dishName, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Text(
-                "${meal.kcal.toInt()} ккал | Б:${meal.proteins.toInt()} Ж:${meal.fats.toInt()} В:${meal.carbs.toInt()}",
+                text = meal.dishName,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = Color.White // Додаємо білий колір для темної теми
+            )
+
+            // ВИПРАВЛЕННЯ: Використовуємо наш шаблон macros_summary та energy_label
+            val kcalText = stringResource(R.string.energy_label, meal.kcal.toInt()).replace("🔥 ", "")
+            val macrosText = stringResource(
+                R.string.macros_summary,
+                meal.proteins.toInt(),
+                meal.fats.toInt(),
+                meal.carbs.toInt()
+            )
+
+            Text(
+                text = "$kcalText | $macrosText",
                 fontSize = 12.sp,
                 color = Color.Gray
             )
@@ -1345,8 +1445,8 @@ fun MealItemRow(meal: MealEntry, onDelete: (MealEntry) -> Unit, onEdit: (MealEnt
         Row {
             IconButton(onClick = { onDelete(meal) }) {
                 Icon(
-                    Icons.Default.Delete,
-                    contentDescription = null,
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.back_button_desc), // Або інший ключ для видалення
                     tint = Color(0xFFE53935),
                     modifier = Modifier.size(24.dp)
                 )
@@ -1411,7 +1511,8 @@ fun calculateGoals(
     height: Float,
     age: Int
 ): UserGoals {
-    val bmr = if (gender == "Чоловік") {
+    // Тепер gender порівнюємо з технічним "Male"
+    val bmr = if (gender == "Male") {
         (10 * weight) + (6.25f * height) - (5 * age) + 5
     } else {
         (10 * weight) + (6.25f * height) - (5 * age) - 161
@@ -1419,21 +1520,19 @@ fun calculateGoals(
     val totalKcal = bmr * 1.2f
 
     return when (profile) {
-        "Спортсмен" -> {
+        "Athlete" -> {
             val p = weight * 2.2f
             val f = weight * 0.9f
             val c = (totalKcal - (p * 4) - (f * 9)) / 4
             UserGoals(totalKcal, p, f, c, c / 12f)
         }
-
-        "Діабетик" -> {
+        "Diabetic" -> {
             val p = weight * 1.5f
             val f = weight * 0.8f
             val c = (totalKcal - (p * 4) - (f * 9)) / 4
             UserGoals(totalKcal, p, f, c, c / 12f)
         }
-
-        else -> {
+        else -> { // Standard
             val p = weight * 1.2f
             val f = weight * 0.8f
             val c = (totalKcal - (p * 4) - (f * 9)) / 4

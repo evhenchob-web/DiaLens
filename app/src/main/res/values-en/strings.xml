@@ -1,0 +1,60 @@
+<resources>
+    <string name="app_name">DIALENS</string>
+
+    <string name="profile_label_standard">Standard</string>
+    <string name="profile_label_athlete">Athlete</string>
+    <string name="profile_label_diabetic">Diabetic</string>
+    <string name="select_mode">Select Mode</string>
+    <string name="gender_male">Male</string>
+    <string name="gender_female">Female</string>
+
+    <string name="stat_kcal">Calories (kcal)</string>
+    <string name="stat_proteins">Proteins (g)</string>
+    <string name="stat_fats">Fats (g)</string>
+    <string name="stat_carbs">Carbs (g)</string>
+    <string name="stat_ho">Bread Units (BU)</string>
+
+    <string name="energy_label">🔥 Energy: %1$d kcal</string>
+    <string name="macros_summary">P: %1$dg | F: %2$dg | C: %3$dg</string>
+
+    <string name="input_placeholder">Add description (e.g. \'chicken salad\')</string>    <string name="camera_tip">For accurate portion size, place your palm in the frame next to the dish</string>
+    <string name="camera_hint">Tap for photo or gallery</string>
+    <string name="analyze_button">ANALYZE</string>
+    <string name="save_to_log">SAVE TO LOG</string>
+    <string name="more_info">More about the dish</string>
+    <string name="collapse">Collapse</string>
+
+    <string name="my_profile">My Profile</string>
+    <string name="age">Age</string>
+    <string name="weight">Weight (kg)</string>
+    <string name="height">Height (cm)</string>
+    <string name="gender_label">Gender</string>
+    <string name="history_today">History Today</string>
+    <string name="no_entries_today">No entries yet today</string>
+    <string name="faq_title">FAQ</string>
+    <string name="tip_expert">Nutritionist Tip</string>
+
+    <string name="btn_save">Save Changes</string>
+    <string name="btn_cancel">CANCEL</string>
+    <string name="btn_close">CLOSE</string>
+
+    <string name="error_no_internet">⚠️ No internet. Check your connection.</string>
+    <string name="error_api">Server error. Please try again later.</string>
+    <string name="toast_updated">Data updated!</string>
+    <string name="toast_fill_all">Please fill all fields</string>
+
+    <string name="faq_screen_title">Instructions &amp; FAQ</string>
+    <string name="back_button_desc">Back</string>
+    <string name="faq_title_label">Frequently Asked Questions (FAQ)</string>
+    <string name="warning_title">IMPORTANT</string>
+    <string name="disclaimer_content">DiaLens is an AI assistant, not a medical device. Calculations for calories, proteins, fats, carbs, and bread units are based on visual assessment and may contain errors. \n\nUse the data for general dietary control only. The developer is not responsible for any consequences of using this data for medical purposes.</string>
+
+    <string name="faq_q1_title">How to get the most accurate result?</string>
+    <string name="faq_q1_answer">For the AI to correctly calculate the portion, place your palm or a standard object (e.g., cutlery) next to the dish. Try to take photos in good lighting from above.</string>
+    <string name="faq_q2_title">Why can the data be approximate?</string>
+    <string name="faq_q2_answer">DiaLens uses visual analysis. AI cannot know the exact composition of sauces, the amount of oil inside, or hidden ingredients. An error of 10-20% is normal for this method.</string>
+    <string name="faq_q3_title">Does the app replace a doctor\'s advice?</string>
+    <string name="faq_q3_answer">Absolutely not. DiaLens calculations are for informational purposes only. If you have chronic conditions (e.g., diabetes), always verify with medical devices.</string>
+    <string name="faq_q4_title">Does the app work without internet?</string>
+    <string name="faq_q4_answer">No, we use powerful Gemini AI servers for image analysis, so an active internet connection is required.</string>
+</resources>

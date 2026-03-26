@@ -1,3 +1,61 @@
 <resources>
-    <string name="app_name">DiaLens</string>
+    <string name="app_name">DIALENS</string>
+
+    <string name="profile_label_standard">Стандарт</string>
+    <string name="profile_label_athlete">Спортсмен</string>
+    <string name="profile_label_diabetic">Діабетик</string>
+    <string name="select_mode">Оберіть режим</string>
+    <string name="gender_male">Чоловік</string>
+    <string name="gender_female">Жінка</string>
+
+    <string name="stat_kcal">Калорії (ккал)</string>
+    <string name="stat_proteins">Білки (г)</string>
+    <string name="stat_fats">Жири (г)</string>
+    <string name="stat_carbs">Вуглеводи (г)</string>
+    <string name="stat_ho">Хлібні одиниці (ХО)</string>
+
+    <string name="energy_label">🔥 Енергія: %1$d ккал</string>
+    <string name="macros_summary">Б: %1$dg | Ж: %2$dg | В: %3$dg</string>
+
+    <string name="input_placeholder">Додай опис (напр. \'борщ\')</string>
+    <string name="camera_tip">Для точного визначення порції помістіть долоню в кадр поруч зі стравою</string>
+    <string name="camera_hint">Натисніть для фото або галереї</string>
+    <string name="analyze_button">АНАЛІЗУВАТИ</string>
+    <string name="save_to_log">ЗБЕРЕГТИ В ЖУРНАЛ</string>
+    <string name="more_info">Більше цікавого про страву</string>
+    <string name="collapse">Згорнути</string>
+
+    <string name="my_profile">Мій Профіль</string>
+    <string name="age">Вік</string>
+    <string name="weight">Вага (кг)</string>
+    <string name="height">Зріст (см)</string>
+    <string name="gender_label">Стать</string>
+    <string name="history_today">Історія за сьогодні</string>
+    <string name="no_entries_today">Сьогодні ще не було записів</string>
+    <string name="faq_title">Часті запитання (FAQ)</string>
+    <string name="tip_expert">Порада дієтолога</string>
+
+    <string name="btn_save">Зберегти зміни</string>
+    <string name="btn_cancel">СКАСУВАТИ</string>
+    <string name="btn_close">ЗАКРИТИ</string>
+
+    <string name="error_no_internet">⚠️ Відсутній інтернет. Перевірте з\'єднання.</string>
+    <string name="error_api">Помилка зв\'язку з сервером. Спробуйте пізніше.</string>
+    <string name="toast_updated">Дані оновлено!</string>
+    <string name="toast_fill_all">Заповніть усі поля</string>
+
+    <string name="faq_screen_title">Часті запитання (FAQ)</string>
+    <string name="back_button_desc">Назад</string>
+    <string name="faq_title_label">Часті питання (FAQ)</string>
+    <string name="warning_title">ВАЖЛИВО</string>
+    <string name="disclaimer_content">DiaLens — це AI-помічник, а не медичний пристрій. Розрахунки КБЖВ (калорії, білки, жири, вуглеводи) та ХО (хлібні одиниці) базуються на візуальній оцінці та можуть містити похибки. \n\nВикористовуйте отримані дані лише для загального контролю раціону. Розробник не несе відповідальності за наслідки використання цих даних у медичних цілях.</string>
+
+    <string name="faq_q1_title">Як DiaLens визначає вагу страви?</string>
+    <string name="faq_q1_answer">Для аналізу ми використовуємо долоню як еталон масштабу. ШІ порівнює розмір страви з розміром руки в кадрі, що дозволяє вирахувати об\'єм та приблизну вагу з точністю до 85%.</string>
+    <string name="faq_q2_title">Чи можна довіряти розрахункам ХО?</string>
+    <string name="faq_q2_answer">Наш алгоритм базується на офіційних таблицях нутрієнтів. Проте пам\'ятайте: дані є орієнтовними. Завжди звіряйтеся зі своїм самопочуттям та порадами лікаря.</string>
+    <string name="faq_q3_title">Чому ШІ помилився з назвою страви?</string>
+    <string name="faq_q3_answer">Складні страви зі змішаними інгредієнтами (наприклад, рагу) важче розпізнати. Ви завжди можете уточнити назву текстом або голосом для точного аналізу.</string>
+    <string name="faq_q4_title">Чи працює додаток без інтернету?</string>
+    <string name="faq_q4_answer">Ні, для аналізу зображення ми використовуємо потужні сервери Gemini AI, тому активне підключення обов\'язкове.</string>
 </resources>
