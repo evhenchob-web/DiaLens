@@ -58,4 +58,10 @@
     <string name="faq_q3_answer">Складні страви зі змішаними інгредієнтами (наприклад, рагу) важче розпізнати. Ви завжди можете уточнити назву текстом або голосом для точного аналізу.</string>
     <string name="faq_q4_title">Чи працює додаток без інтернету?</string>
     <string name="faq_q4_answer">Ні, для аналізу зображення ми використовуємо потужні сервери Gemini AI, тому активне підключення обов\'язкове.</string>
+    <string name="mode_food">СТРАВА</string>
+    <string name="mode_label">СКЛАД</string>
+
+    <string name="label_analysis_title">Аналіз складу</string>
+    <string name="default_dish_name">Аналіз страви</string>
+    <string name="btn_got_it">ЗРОЗУМІЛО</string>
 </resources>

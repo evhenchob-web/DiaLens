@@ -57,4 +57,10 @@
     <string name="faq_q3_answer">Absolutely not. DiaLens calculations are for informational purposes only. If you have chronic conditions (e.g., diabetes), always verify with medical devices.</string>
     <string name="faq_q4_title">Does the app work without internet?</string>
     <string name="faq_q4_answer">No, we use powerful Gemini AI servers for image analysis, so an active internet connection is required.</string>
+    <string name="mode_food">MEAL</string>
+    <string name="mode_label">INGREDIENTS</string>
+
+    <string name="label_analysis_title">Ingredient Analysis</string>
+    <string name="default_dish_name">Meal Analysis</string>
+    <string name="btn_got_it">GOT IT</string>
 </resources>

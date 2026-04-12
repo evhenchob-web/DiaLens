@@ -14,7 +14,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.launch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -50,6 +49,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material.icons.filled.Fastfood
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Mic
@@ -119,8 +120,10 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Upsert
 import com.google.ai.client.generativeai.GenerativeModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 // --- БАЗА ДАНИХ ТА МОДЕЛІ ---
@@ -250,6 +253,7 @@ fun DiaLensMainScreen(
     // МАЄ БУТИ САМЕ ТАК:
     // Тепер тут зберігається технічний ключ: "Standard", "Athlete" або "Diabetic"
     var userProfile by remember { mutableStateOf("Standard") }
+    var scanMode by remember { mutableStateOf(ScanMode.FOOD) }
 
     LaunchedEffect(userProfileData) {
         userProfileData?.let {
@@ -326,12 +330,30 @@ fun DiaLensMainScreen(
             permissionLauncher.launch(permissions)
         }
     }
-    val cameraLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-            if (bitmap != null) {
-                capturedBitmap = bitmap; resultText = ""
+    // Змінна для тимчасового зберігання шляху до повноцінного фото
+    var tempImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+// Новий лаунчер: TakePicture замість TakePicturePreview
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            tempImageUri?.let { uri ->
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        val rawBitmap = BitmapFactory.decodeStream(stream)
+                        // ТУТ ВИПРАВЛЯЄМО ПОВОРОТ:
+                        val fixedBitmap = rotateImageIfRequired(rawBitmap, context, uri)
+
+                        capturedBitmap = fixedBitmap
+                        resultText = ""
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Помилка обробки фото", Toast.LENGTH_SHORT).show()
+                }
             }
         }
+    }
 
     val galleryLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -350,20 +372,21 @@ fun DiaLensMainScreen(
             }
         }
 
-    fun analyzeMeal(context: Context) {
+    // Додаємо параметр mode
+    fun analyzeMeal(context: Context, mode: ScanMode) {
         if (!isNetworkAvailable(context)) {
             resultText = context.getString(R.string.error_no_internet)
             return
         }
 
-        // 1. Зберігаємо поточний стан у тимчасові змінні (локальні копії)
-        // Це гарантує, що запит не зміниться, навіть якщо ми очистимо поля відразу
         val textToAnalyze = additionalInfo
         val bitmapToAnalyze = capturedBitmap
 
-        // Перевірка на порожнечу (використовуємо локальні копії)
+        // Якщо нічого немає для аналізу
         if (bitmapToAnalyze == null && textToAnalyze.isEmpty()) {
-            cameraLauncher.launch()
+            // Замість виклику камери (яка тепер потребує Uri),
+            // краще просто показати Toast або повідомлення
+            Toast.makeText(context, "Спочатку зробіть фото або введіть текст", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -373,35 +396,42 @@ fun DiaLensMainScreen(
                 val currentLanguage = Locale.getDefault().language
                 val languageInstruction = if (currentLanguage == "uk") "Пиши відповідь українською." else "Write the response in English."
 
-                val profileContext = when (userProfile) {
-                    "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
-                    "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
-                    else -> "Стандартний (збалансоване харчування)"
+                // Формуємо промпт залежно від обраного режиму
+                val expertPrompt = when (mode) {
+                    ScanMode.FOOD -> {
+                        val profileContext = when (userProfile) {
+                            "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
+                            "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
+                            else -> "Стандартний (збалансоване харчування)"
+                        }
+                        """
+                    $languageInstruction
+                    Ти — професійний дієтолог-ендокринолог. Клієнт має профіль: $profileContext.
+                    ЗАВДАННЯ:
+                    1. Проаналізуй страву: "$textToAnalyze".
+                    2. Якщо в описі вказана вага — розрахуй на неї, якщо ні — на порцію 250г.
+                    3. Дай коротку пораду та один цікавий факт.
+                    ТЕХНІЧНІ ВИМОГИ: ПИШИ ТІЛЬКИ ОДНЕ КОНКРЕТНЕ ЧИСЛО. Жодних діапазонів.
+                    В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК:
+                    ---
+                    СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
+                    """.trimIndent()
+                    }
+                    ScanMode.LABEL -> {
+                        """
+                    $languageInstruction
+                    Ти — експерт із харчової безпеки та технолог. 
+                    ЗАВДАННЯ:
+                    1. Проаналізуй фото етикетки або текст складу: "$textToAnalyze".
+                    2. Знайди всі харчові добавки (E-номери та хімічні назви).
+                    3. Для кожної вкажи: Назва (E-код) — Рівень небезпеки (Безпечно/Шкідливо/Сумнівно) — Коротке пояснення чому.
+                    4. Дай фінальний вердикт: "Рекомендовано", "Можна вживати рідко" або "Не рекомендовано".
+                    Пиши лаконічно, списком.
+                    """.trimIndent()
+                    }
                 }
 
-                // Твій повний промпт без жодних скорочень
-                val expertPrompt = """
-                $languageInstruction
-                Ти — професійний дієтолог-ендокринолог. 
-                Клієнт має профіль: $profileContext.
-
-                ЗАВДАННЯ:
-                1. Проаналізуй страву: "$textToAnalyze".
-                2. Якщо в описі страви вказана конкретна вага (наприклад, 100г) — розрахуй КБЖВ СУВОРО на цю вагу. 
-                   Якщо вага НЕ вказана — бери середню порцію 250г.
-                3. Дай коротку пораду щодо вживання цієї страви для цього профілю та один цікавий факт.
-
-                ТЕХНІЧНІ ВИМОГИ (НЕ виводь ці заголовки у відповіді):
-                - Будь реалістичним (обід 300-700 ккал, не більше 2000 ккал на страву).
-                - ПИШИ ТІЛЬКИ ОДНЕ КОНКРЕТНЕ ЧИСЛО. Жодних діапазонів (наприклад, не пиши "15-20").
-                - Якщо не впевнений — бери середнє значення.
-                - Пиши тільки цілими числами, без ком та символів.
-
-                В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК (без заголовків):
-                ---
-                СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
-            """.trimIndent()
-
+                // Виклик моделі залишається майже таким самим
                 val response = if (bitmapToAnalyze != null) {
                     val bitmapToSend = resizeBitmap(bitmapToAnalyze)
                     visionModel.generateContent(
@@ -418,16 +448,12 @@ fun DiaLensMainScreen(
 
                 if (responseText.isNotBlank()) {
                     resultText = responseText
-
-                    // --- ОЧИЩЕННЯ ПРИ УСПІХУ ---
-                    additionalInfo = ""   // Очищуємо текстове поле
-                    capturedBitmap = null // Очищуємо зроблене фото
+                    additionalInfo = ""
+                    capturedBitmap = null
                 }
-
                 keyboardController?.hide()
 
             } catch (e: Exception) {
-                // При помилці поля НЕ очищуються (блок вище пропускається)
                 resultText = context.resources.getString(R.string.error_api)
             } finally {
                 isLoading = false
@@ -649,7 +675,7 @@ fun DiaLensMainScreen(
                     // 2. Визначаємо, що робити при натисканні на цю лупу
                     keyboardActions = KeyboardActions(
                         onSearch = {
-                            analyzeMeal(context) // Запускаємо аналіз
+                            analyzeMeal(context, scanMode) // Запускаємо аналіз
                             additionalInfo = ""  // 2. Очищуємо поле після запуску
                             keyboardController?.hide() // Ховаємо клавіатуру
                         }
@@ -721,7 +747,8 @@ fun DiaLensMainScreen(
                                     userProfile,
                                     mainTextColor,
                                     mealDao,
-                                    coroutineScope
+                                    coroutineScope,
+                                    scanMode
                                 ) { _, _, _, _ -> resultText = ""; capturedBitmap = null }
 
                                 IconButton(
@@ -770,7 +797,26 @@ fun DiaLensMainScreen(
                                         }
 
                                         if (allGranted) {
-                                            cameraLauncher.launch()
+                                            coroutineScope.launch(Dispatchers.IO) {
+                                                try {
+                                                    // 1. Створюємо порожній файл
+                                                    val file = createImageFile(context)
+                                                    // 2. Отримуємо його Uri через наш FileProvider
+                                                    val uri = getUriForFile(context, file)
+                                                    // 3. Зберігаємо Uri в стейт, щоб дістати фото після зйомки
+                                                    tempImageUri = uri
+
+                                                    // 4. Запускаємо камеру (це має бути в Main потоці)
+                                                    withContext(Dispatchers.Main) {
+                                                        cameraLauncher.launch(uri)
+                                                    }
+                                                } catch (e: Exception) {
+                                                    withContext(Dispatchers.Main) {
+                                                        Toast.makeText(context, "Не вдалося створити файл для фото", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+
                                         } else {
                                             permissionLauncher.launch(permissions)
                                         }
@@ -849,9 +895,39 @@ fun DiaLensMainScreen(
             } // КІНЕЦЬ ВНУТРІШНЬОЇ COLUMN (padding 16.dp)
         } // КІНЕЦЬ ГОЛОВНОЇ COLUMN (яка йде після шапки)
 
+        // ПАНЕЛЬ ВИБОРУ РЕЖИМУ (Прямо над кнопкою)
+        if (resultText.isEmpty() && !isLoading) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 104.dp) // Відступ, щоб бути над головною кнопкою (64dp висота + 32dp відступ + 8dp зазор)
+                    .background(
+                        color = if (isSystemInDarkTheme()) Color.DarkGray.copy(0.4f) else Color.Gray.copy(0.1f),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Режим: Страва
+                ModeIcon(
+                    icon = Icons.Default.Fastfood,
+                    text = stringResource(R.string.mode_food), // "СТРАВА"
+                    isSelected = scanMode == ScanMode.FOOD,
+                    onClick = { scanMode = ScanMode.FOOD }
+                )
+
+                // Режим: Склад/Етикетка
+                ModeIcon(
+                    icon = Icons.Default.FactCheck,
+                    text = stringResource(R.string.mode_label), // "СКЛАД"
+                    isSelected = scanMode == ScanMode.LABEL,
+                    onClick = { scanMode = ScanMode.LABEL }
+                )
+            }
+        }
 // ТЕПЕР КНОПКА ЗНАХОДИТЬСЯ ПРЯМО В BOX
         Button(
-            onClick = { analyzeMeal(context) },
+            onClick = { analyzeMeal(context, scanMode) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 16.dp)
@@ -1251,138 +1327,171 @@ fun StatRow(label: String, value: Float, target: Float, color: Color, textColor:
 @Composable
 fun DetailedResultView(
     text: String,
-    userProfile: String, // Тут тепер прилітає "Diabetic", "Athlete" або "Standard"
+    userProfile: String,
     textColor: Color,
     mealDao: MealDao,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
+    scanMode: ScanMode,
     onConfirm: (Float, Float, Float, Float) -> Unit
 ) {
-    val kcal = parseVal(text, "ККАЛ")
-    val b = parseVal(text, "БІЛКИ")
-    val j = parseVal(text, "ЖИРИ")
-    val v = parseVal(text, "ВУГЛЕВОДИ")
-    val dishName = text.substringAfter("СТРАВА:", "Страва").substringBefore("|").trim()
-
-    val fullDescription = text.substringBefore("СТРАВА:")
-        .replace("**", "").replace("##", "").replace("*", "•")
-        .trim()
-
     var isExpanded by remember { mutableStateOf(false) }
 
     Column(
         Modifier
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState()) // ГОЛОВНИЙ СКРОЛ (залишаємо один)
             .padding(top = 16.dp, start = 16.dp, end = 16.dp)
     ) {
-        Text(
-            text = dishName.uppercase(),
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Black,
-            color = Color(0xFF4CAF50),
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+        when (scanMode) {
+            ScanMode.FOOD -> {
+                // Безпечний парсинг
+                val kcal = try { parseVal(text, "ККАЛ") } catch (e: Exception) { 0f }
+                val b = try { parseVal(text, "БІЛКИ") } catch (e: Exception) { 0f }
+                val j = try { parseVal(text, "ЖИРИ") } catch (e: Exception) { 0f }
+                val v = try { parseVal(text, "ВУГЛЕВОДИ") } catch (e: Exception) { 0f }
 
-        Surface(
-            color = if (isSystemInDarkTheme()) Color(0xFF252525) else Color(0xFFF5F5F5),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(12.dp)) {
-                Text(
-                    text = if (isExpanded || fullDescription.length <= 130) fullDescription
-                    else fullDescription.take(130).substringBeforeLast(" ") + "...",
-                    color = textColor.copy(alpha = 0.9f),
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp
-                )
+                val dishName = if (text.contains("СТРАВА:")) {
+                    text.substringAfter("СТРАВА:").substringBefore("|", "Страва").trim()
+                } else {
+                    stringResource(R.string.default_dish_name)
+                }
 
+                val fullDescription = if (text.contains("---")) {
+                    text.substringBefore("---")
+                } else if (text.contains("СТРАВА:")) {
+                    text.substringBefore("СТРАВА:")
+                } else {
+                    text
+                }.replace("**", "").replace("##", "").replace("*", "•").trim()
+
+                // ПОЧАТОК UI БЕЗ ЗАЙВОГО COLUMN
                 Text(
-                    text = if (isExpanded) stringResource(R.string.collapse)
-                    else stringResource(R.string.more_info),
+                    text = dishName.uppercase(),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
                     color = Color(0xFF4CAF50),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    modifier = Modifier
-                        .padding(top = 8.dp)
-                        .clickable { isExpanded = !isExpanded }
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-            }
-        }
 
-        Spacer(Modifier.height(16.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                // Використовуємо формат %1$d з strings.xml
-                Text(
-                    text = stringResource(R.string.energy_label, kcal.toInt()),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 18.sp,
-                    color = textColor
-                )
-                // Використовуємо формат Б: %1$dg | Ж: %2$dg | В: %3$dg
-                Text(
-                    text = stringResource(R.string.macros_summary, b.toInt(), j.toInt(), v.toInt()),
-                    color = textColor.copy(alpha = 0.7f)
-                )
-            }
-
-            // ПЕРЕВІРКА: тепер порівнюємо з "Diabetic"
-            if (userProfile == "Diabetic") {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    val ho = v / 12f
-                    Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
+                Surface(
+                    color = if (isSystemInDarkTheme()) Color(0xFF252525) else Color(0xFFF5F5F5),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(12.dp)) {
                         Text(
-                            // Виводимо число ХО
-                            text = String.format("%.1f", ho) + " " + stringResource(R.string.stat_ho).filter { it.isLetter() },
-                            color = Color(0xFF2E7D32),
+                            text = if (isExpanded || fullDescription.length <= 130) fullDescription
+                            else fullDescription.take(130).substringBeforeLast(" ") + "...",
+                            color = textColor.copy(alpha = 0.9f),
+                            fontSize = 14.sp,
+                            lineHeight = 18.sp
+                        )
+
+                        Text(
+                            text = if (isExpanded) stringResource(R.string.collapse)
+                            else stringResource(R.string.more_info),
+                            color = Color(0xFF4CAF50),
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .padding(top = 8.dp)
+                                .clickable { isExpanded = !isExpanded }
                         )
                     }
-                    Text(
-                        text = stringResource(R.string.stat_ho),
-                        fontSize = 10.sp,
-                        color = Color.Gray
-                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.energy_label, kcal.toInt()),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp,
+                            color = textColor
+                        )
+                        Text(
+                            text = stringResource(R.string.macros_summary, b.toInt(), j.toInt(), v.toInt()),
+                            color = textColor.copy(alpha = 0.7f)
+                        )
+                    }
+
+                    if (userProfile == "Diabetic") {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val ho = v / 12f
+                            Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(8.dp)) {
+                                Text(
+                                    text = String.format("%.1f", ho) + " " + stringResource(R.string.stat_ho).filter { it.isLetter() },
+                                    color = Color(0xFF2E7D32),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                            Text(text = stringResource(R.string.stat_ho), fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            mealDao.insertMeal(MealEntry(dishName = dishName, kcal = kcal, proteins = b, fats = j, carbs = v))
+                            onConfirm(kcal, b, j, v)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                ) {
+                    Icon(Icons.Default.AddCircleOutline, null, tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text(text = stringResource(R.string.save_to_log), fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
-        }
 
-        Spacer(Modifier.height(16.dp))
+            ScanMode.LABEL -> {
+                Text(
+                    text = stringResource(R.string.label_analysis_title).uppercase(),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color(0xFF4CAF50),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
 
-        Button(
-            onClick = {
-                coroutineScope.launch {
-                    mealDao.insertMeal(
-                        MealEntry(
-                            dishName = dishName,
-                            kcal = kcal,
-                            proteins = b,
-                            fats = j,
-                            carbs = v
+                Surface(
+                    color = if (isSystemInDarkTheme()) Color(0xFF252525) else Color(0xFFF5F5F5),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = text.replace("**", "").replace("##", "").replace("*", "•").trim(),
+                            color = textColor.copy(alpha = 0.9f),
+                            fontSize = 15.sp,
+                            lineHeight = 20.sp
                         )
-                    )
-                    onConfirm(kcal, b, j, v)
+                    }
                 }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
-        ) {
-            Icon(Icons.Default.AddCircleOutline, null, tint = Color.White)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.save_to_log),
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+
+                Spacer(Modifier.height(16.dp))
+
+                Button(
+                    onClick = { onConfirm(0f, 0f, 0f, 0f) },
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF4CAF50),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text(text = stringResource(R.string.btn_got_it).uppercase(), fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
         }
     }
 }
@@ -1557,19 +1666,29 @@ fun parseVal(text: String, key: String): Float {
     }
 }
 
-fun resizeBitmap(source: android.graphics.Bitmap, maxLength: Int = 1024): android.graphics.Bitmap {
-    val aspectRatio = source.width.toFloat() / source.height.toFloat()
-    val targetWidth: Int
-    val targetHeight: Int
+fun resizeBitmap(source: android.graphics.Bitmap): android.graphics.Bitmap {
+    val maxSize = 1536 // 2048 іноді забагато для пам'яті (може бути OutOfMemory), 1536 - золота середина
+    val width = source.width
+    val height = source.height
 
-    if (source.width > source.height) {
-        targetWidth = maxLength
-        targetHeight = (maxLength / aspectRatio).toInt()
+    if (width <= maxSize && height <= maxSize) return source
+
+    val aspectRatio: Float = width.toFloat() / height.toFloat()
+    val (targetWidth, targetHeight) = if (width > height) {
+        maxSize to (maxSize / aspectRatio).toInt()
     } else {
-        targetHeight = maxLength
-        targetWidth = (maxLength * aspectRatio).toInt()
+        (maxSize * aspectRatio).toInt() to maxSize
     }
-    return android.graphics.Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+
+    // Створюємо результат з вищою якістю
+    val result = android.graphics.Bitmap.createBitmap(targetWidth, targetHeight, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(result)
+    val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG or android.graphics.Paint.DITHER_FLAG)
+
+    val rect = android.graphics.Rect(0, 0, targetWidth, targetHeight)
+    canvas.drawBitmap(source, null, rect, paint)
+
+    return result
 }
 
 fun isNetworkAvailable(context: Context): Boolean {
@@ -1581,7 +1700,6 @@ fun isNetworkAvailable(context: Context): Boolean {
 }
 
 // МОДЕЛЬ ДАНИХ (Тільки одна!)
-// МОДЕЛЬ ДАНИХ (Тільки одна!)
 data class UserGoals(
     val kcal: Float = 0f,
     val proteins: Float = 0f,
@@ -1590,6 +1708,11 @@ data class UserGoals(
     val ho: Float = 0f
 )
 
+// Визначаємо режими сканування
+enum class ScanMode {
+    FOOD,    // Аналіз страви (калорії)
+    LABEL    // Аналіз етикетки (добавки)
+}
 // ФУНКЦІЯ РОЗРАХУНКУ (Тільки одна!)
 fun calculateGoals(
     profile: String,
@@ -1626,4 +1749,81 @@ fun calculateGoals(
             UserGoals(totalKcal, p, f, c, c / 12f)
         }
     }
+}
+
+@Composable
+fun ModeIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String, // Додаємо текст
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .background(
+                color = if (isSelected) Color(0xFF2E7D32) else Color.Transparent,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp), // Робимо кнопку зручною для натискання
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (isSelected) Color.White else Color.Gray,
+            modifier = Modifier.size(18.dp)
+        )
+        if (isSelected) { // Показуємо текст тільки для обраного режиму, щоб не захаращувати екран
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = text,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+fun createImageFile(context: Context): java.io.File {
+    val storageDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+    return java.io.File.createTempFile(
+        "DiaLens_${System.currentTimeMillis()}_",
+        ".jpg",
+        storageDir
+    )
+}
+
+fun getUriForFile(context: Context, file: java.io.File): android.net.Uri {
+    return androidx.core.content.FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+}
+
+fun rotateImageIfRequired(img: android.graphics.Bitmap, context: Context, selectedImage: android.net.Uri): android.graphics.Bitmap {
+    val input = context.contentResolver.openInputStream(selectedImage) ?: return img
+    val ei = androidx.exifinterface.media.ExifInterface(input)
+    val orientation = ei.getAttributeInt(
+        androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
+    )
+
+    return when (orientation) {
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotateImage(img, 90f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotateImage(img, 180f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotateImage(img, 270f)
+        else -> img
+    }
+}
+
+private fun rotateImage(img: android.graphics.Bitmap, degree: Float): android.graphics.Bitmap {
+    val matrix = android.graphics.Matrix()
+    matrix.postRotate(degree)
+    val rotatedImg = android.graphics.Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
+    img.recycle()
+    return rotatedImg
 }

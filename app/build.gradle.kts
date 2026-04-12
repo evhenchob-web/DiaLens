@@ -18,7 +18,9 @@ val geminiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
 android {
     namespace = "com.example.dialens"
     compileSdk = 36 // БУЛО 35, СТАВИМО 36
-
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId = "com.example.dialens"
         minSdk = 24
@@ -66,6 +68,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.exifinterface:exifinterface:1.3.6")
     implementation(libs.androidx.compose.foundation)
     val roomVersion = "2.7.0-alpha13" // Або "2.7.0-beta01", якщо вже доступна
 
