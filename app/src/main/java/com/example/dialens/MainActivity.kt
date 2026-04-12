@@ -3,11 +3,13 @@ package com.example.dialens
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -104,6 +106,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.room.Dao
 import androidx.room.Database
@@ -293,6 +296,36 @@ fun DiaLensMainScreen(
         remember { GenerativeModel(modelName = "gemini-3.1-flash-lite-preview", apiKey = apiKey) }
     val textModel = remember { GenerativeModel(modelName = "gemma-3n-e2b-it", apiKey = apiKey) }
     // 6. Лаунчери
+
+    // 1. Створюємо "ланчер" для запиту дозволів
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val cameraGranted = permissions[android.Manifest.permission.CAMERA] ?: false
+        val audioGranted = permissions[android.Manifest.permission.RECORD_AUDIO] ?: false
+
+        if (cameraGranted && audioGranted) {
+            // Усе добре, можна відкривати камеру/мікрофон
+        } else {
+            // Користувач відмовив — можна показати Toast "Нам потрібні дозволи"
+        }
+    }
+
+    // 2. Функція для перевірки та запиту
+    fun checkAndRequestPermissions(context: Context) {
+        val permissions = arrayOf(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO
+        )
+
+        // Перевіряємо, чи вже є дозволи
+        if (permissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) {
+            // Вже є дозволи — відкриваємо функцію
+        } else {
+            // Запитуємо
+            permissionLauncher.launch(permissions)
+        }
+    }
     val cameraLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
             if (bitmap != null) {
@@ -323,62 +356,81 @@ fun DiaLensMainScreen(
             return
         }
 
-        if (capturedBitmap == null && additionalInfo.isEmpty()) {
-            cameraLauncher.launch() // Викликаємо лаунчер камери
-            return // Виходимо, щоб не запускати аналіз порожнечі
+        // 1. Зберігаємо поточний стан у тимчасові змінні (локальні копії)
+        // Це гарантує, що запит не зміниться, навіть якщо ми очистимо поля відразу
+        val textToAnalyze = additionalInfo
+        val bitmapToAnalyze = capturedBitmap
+
+        // Перевірка на порожнечу (використовуємо локальні копії)
+        if (bitmapToAnalyze == null && textToAnalyze.isEmpty()) {
+            cameraLauncher.launch()
+            return
         }
 
-        if (capturedBitmap != null || additionalInfo.isNotEmpty()) {
-            isLoading = true
-            coroutineScope.launch {
-                try {
-                    val currentLanguage = Locale.getDefault().language // Визначаємо мову телефону
-                    val languageInstruction = if (currentLanguage == "uk") "Пиши відповідь українською." else "Write the response in English."
-                    val profileContext = when (userProfile) {
-                        "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
-                        "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
-                        else -> "Стандартний (збалансоване харчування)"
-                    }
+        isLoading = true
+        coroutineScope.launch {
+            try {
+                val currentLanguage = Locale.getDefault().language
+                val languageInstruction = if (currentLanguage == "uk") "Пиши відповідь українською." else "Write the response in English."
 
-                    val expertPrompt = """
-                        Ти — професійний дієтолог-ендокринолог. 
-                        Клієнт має профіль: $profileContext.
-
-                        ЗАВДАННЯ:
-                        1. Проаналізуй страву: "$additionalInfo".
-                        2. Якщо в описі страви вказана конкретна вага (наприклад, 100г) — розрахуй КБЖВ СУВОРО на цю вагу. 
-                            Якщо вага НЕ вказана — бери середню порцію 250г.
-                        3. Дай коротку пораду щодо вживання цієї страви для цього профілю та один цікавий факт.
-
-                        ТЕХНІЧНІ ВИМОГИ (НЕ виводь ці заголовки у відповіді):
-                        - Будь реалістичним (обід 300-700 ккал, не більше 2000 ккал на страву).
-                        - Пиши тільки цілими числами, без ком.
-
-                        В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК (без заголовків):
-                        ---
-                        СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
-                    """.trimIndent()
-
-                    val response = if (capturedBitmap != null) {
-                        val bitmapToSend = resizeBitmap(capturedBitmap!!)
-                        visionModel.generateContent(
-                            com.google.ai.client.generativeai.type.content {
-                                image(bitmapToSend)
-                                text("Контекст: $additionalInfo \n\n $expertPrompt")
-                            }
-                        )
-                    } else {
-                        textModel.generateContent("Аналізуй: $additionalInfo \n\n $expertPrompt")
-                    }
-
-                    resultText = response.text ?: ""
-                    keyboardController?.hide()
-                } catch (e: Exception) {
-                    // ВИКОРИСТОВУЄМО КОНСТАНТУ З РЕСУРСІВ
-                    resultText = context.resources.getString(R.string.error_api)
-                } finally {
-                    isLoading = false
+                val profileContext = when (userProfile) {
+                    "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
+                    "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
+                    else -> "Стандартний (збалансоване харчування)"
                 }
+
+                // Твій повний промпт без жодних скорочень
+                val expertPrompt = """
+                $languageInstruction
+                Ти — професійний дієтолог-ендокринолог. 
+                Клієнт має профіль: $profileContext.
+
+                ЗАВДАННЯ:
+                1. Проаналізуй страву: "$textToAnalyze".
+                2. Якщо в описі страви вказана конкретна вага (наприклад, 100г) — розрахуй КБЖВ СУВОРО на цю вагу. 
+                   Якщо вага НЕ вказана — бери середню порцію 250г.
+                3. Дай коротку пораду щодо вживання цієї страви для цього профілю та один цікавий факт.
+
+                ТЕХНІЧНІ ВИМОГИ (НЕ виводь ці заголовки у відповіді):
+                - Будь реалістичним (обід 300-700 ккал, не більше 2000 ккал на страву).
+                - ПИШИ ТІЛЬКИ ОДНЕ КОНКРЕТНЕ ЧИСЛО. Жодних діапазонів (наприклад, не пиши "15-20").
+                - Якщо не впевнений — бери середнє значення.
+                - Пиши тільки цілими числами, без ком та символів.
+
+                В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК (без заголовків):
+                ---
+                СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
+            """.trimIndent()
+
+                val response = if (bitmapToAnalyze != null) {
+                    val bitmapToSend = resizeBitmap(bitmapToAnalyze)
+                    visionModel.generateContent(
+                        com.google.ai.client.generativeai.type.content {
+                            image(bitmapToSend)
+                            text("Контекст: $textToAnalyze \n\n $expertPrompt")
+                        }
+                    )
+                } else {
+                    textModel.generateContent("Аналізуй: $textToAnalyze \n\n $expertPrompt")
+                }
+
+                val responseText = response.text ?: ""
+
+                if (responseText.isNotBlank()) {
+                    resultText = responseText
+
+                    // --- ОЧИЩЕННЯ ПРИ УСПІХУ ---
+                    additionalInfo = ""   // Очищуємо текстове поле
+                    capturedBitmap = null // Очищуємо зроблене фото
+                }
+
+                keyboardController?.hide()
+
+            } catch (e: Exception) {
+                // При помилці поля НЕ очищуються (блок вище пропускається)
+                resultText = context.resources.getString(R.string.error_api)
+            } finally {
+                isLoading = false
             }
         }
     }
@@ -598,6 +650,7 @@ fun DiaLensMainScreen(
                     keyboardActions = KeyboardActions(
                         onSearch = {
                             analyzeMeal(context) // Запускаємо аналіз
+                            additionalInfo = ""  // 2. Очищуємо поле після запуску
                             keyboardController?.hide() // Ховаємо клавіатуру
                         }
                     ),
@@ -614,18 +667,33 @@ fun DiaLensMainScreen(
                     ),
                     trailingIcon = {
                         IconButton(onClick = {
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(
-                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                                )
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "uk-UA")
+                            // 1. Перевіряємо, чи надано дозвіл на запис аудіо
+                            val isGranted = ContextCompat.checkSelfPermission(
+                                context,
+                                android.Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                            if (isGranted) {
+                                // 2. Якщо дозвіл є — запускаємо диктофон
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(
+                                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                                    )
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "uk-UA")
+                                }
+                                try {
+                                    speechLauncher.launch(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                // 3. Якщо дозволу немає — запитуємо його через лаунчер
+                                permissionLauncher.launch(arrayOf(android.Manifest.permission.RECORD_AUDIO))
                             }
-                            try {
-                                speechLauncher.launch(intent)
-                            } catch (e: Exception) {
-                            }
-                        }) { Icon(Icons.Default.Mic, null, tint = Color(0xFF4CAF50)) }
+                        }) {
+                            Icon(Icons.Default.Mic, null, tint = Color(0xFF4CAF50))
+                        }
                     }
                 )
 
@@ -691,7 +759,22 @@ fun DiaLensMainScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .clickable { cameraLauncher.launch() }
+                                    .clickable {
+                                        val permissions = arrayOf(
+                                            android.Manifest.permission.CAMERA,
+                                            android.Manifest.permission.RECORD_AUDIO
+                                        )
+
+                                        val allGranted = permissions.all {
+                                            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+                                        }
+
+                                        if (allGranted) {
+                                            cameraLauncher.launch()
+                                        } else {
+                                            permissionLauncher.launch(permissions)
+                                        }
+                                    }
                             ) {
                                 // 1. --- ПОРАДА ЗВЕРХУ (додається поверх всього) ---
                                 Surface(
@@ -1458,13 +1541,17 @@ fun MealItemRow(meal: MealEntry, onDelete: (MealEntry) -> Unit, onEdit: (MealEnt
 // ОНОВЛЕНИЙ БРОНЕБІЙНИЙ ПАРСЕР
 fun parseVal(text: String, key: String): Float {
     return try {
-        // Шукаємо текст після ключа, ігноруючи все до наступного роздільника |
+        // 1. Знаходимо частину тексту після ключа (наприклад, після "ККАЛ:")
         val regex = "$key:\\s*([^|\\n]+)".toRegex(RegexOption.IGNORE_CASE)
         val match = regex.find(text)
-        val valueStr = match?.groupValues?.get(1) ?: "0"
-        // Залишаємо тільки цифри та крапку/кому
-        val cleanValue = valueStr.replace(Regex("[^0-9.,]"), "").replace(",", ".")
-        cleanValue.toFloatOrNull() ?: 0f
+        val valueStr = match?.groupValues?.get(1)?.trim() ?: "0"
+
+        // 2. Беремо символи, поки вони є цифрами або крапкою/комою.
+        // Як тільки зустрінемо тире (-) або пробіл — зупиняємось.
+        val firstPart = valueStr.takeWhile { it.isDigit() || it == '.' || it == ',' }
+
+        // 3. Чистимо кому на крапку для Float та повертаємо результат
+        firstPart.replace(",", ".").toFloatOrNull() ?: 0f
     } catch (e: Exception) {
         0f
     }

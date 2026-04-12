@@ -34,11 +34,19 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Вмикаємо стиснення та очищення коду
+            isMinifyEnabled = true
+            // Вмикаємо видалення невикористовуваних ресурсів
+            isShrinkResources = true
+
+            // Стандартні правила ProGuard
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+
+            // Вказуємо назву для релізного білду (опціонально)
+            signingConfig = signingConfigs.getByName("debug") // Поки що ставимо debug, пізніше замінимо на release
         }
     }
 
