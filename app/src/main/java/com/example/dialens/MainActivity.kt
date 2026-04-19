@@ -125,6 +125,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import android.util.Log
 
 // --- БАЗА ДАНИХ ТА МОДЕЛІ ---
 
@@ -235,6 +236,12 @@ fun DiaLensMainScreen(
     var consumedCarbs by remember { mutableFloatStateOf(0f) }
 
     var showFaq by remember { mutableStateOf(false) }
+    // Результати останнього аналізу (те, що виводиться в кружечки після камери)
+    var calories by remember { mutableStateOf("0") }
+    var proteins by remember { mutableStateOf("0") }
+    var fats by remember { mutableStateOf("0") }
+    var carbs by remember { mutableStateOf("0") }
+
     val sheetState = rememberModalBottomSheetState()
     var showTipSheet by remember { mutableStateOf(false) }
 
@@ -372,8 +379,17 @@ fun DiaLensMainScreen(
             }
         }
 
-    // Додаємо параметр mode
-    fun analyzeMeal(context: Context, mode: ScanMode) {
+    // Тепер функція знає, що їй дадуть інструменти для оновлення
+    fun analyzeMeal(
+        context: Context,
+        mode: ScanMode,
+        // Додай ці параметри:
+        updateCalories: (String) -> Unit,
+        updateProteins: (String) -> Unit,
+        updateFats: (String) -> Unit,
+        updateCarbs: (String) -> Unit,
+        updateResultText: (String) -> Unit // для тексту відповіді
+    ) {
         if (!isNetworkAvailable(context)) {
             resultText = context.getString(R.string.error_no_internet)
             return
@@ -396,42 +412,37 @@ fun DiaLensMainScreen(
                 val currentLanguage = Locale.getDefault().language
                 val languageInstruction = if (currentLanguage == "uk") "Пиши відповідь українською." else "Write the response in English."
 
-                // Формуємо промпт залежно від обраного режиму
+                // 1. Готуємо спільну вимогу щодо JSON (щоб не дублювати)
+                val jsonInstruction = """
+                Важливо: В самому кінці відповіді ОБОВ'ЯЗКОВО додай технічний блок:
+                <JSON_DATA>
+                {
+                  "calories": 0.0,
+                  "protein": 0.0,
+                  "fat": 0.0,
+                  "carbs": 0.0,
+                  "sugar": 0.0,
+                  "xe": 0.0
+                }
+                </JSON_DATA>
+                Використовуй тільки числа. Розрахунок на 100г.
+            """.trimIndent()
+
                 val expertPrompt = when (mode) {
                     ScanMode.FOOD -> {
                         val profileContext = when (userProfile) {
-                            "Athlete" -> "Спортсмен (висока потреба в білку та енергії)"
-                            "Diabetic" -> "Діабетик (суворий контроль вуглеводів та ГІ)"
-                            else -> "Стандартний (збалансоване харчування)"
+                            "Athlete" -> "Спортсмен"
+                            "Diabetic" -> "Діабетик"
+                            else -> "Стандарт"
                         }
-                        """
-                    $languageInstruction
-                    Ти — професійний дієтолог-ендокринолог. Клієнт має профіль: $profileContext.
-                    ЗАВДАННЯ:
-                    1. Проаналізуй страву: "$textToAnalyze".
-                    2. Якщо в описі вказана вага — розрахуй на неї, якщо ні — на порцію 250г.
-                    3. Дай коротку пораду та один цікавий факт.
-                    ТЕХНІЧНІ ВИМОГИ: ПИШИ ТІЛЬКИ ОДНЕ КОНКРЕТНЕ ЧИСЛО. Жодних діапазонів.
-                    В КІНЦІ ВІДПОВІДІ ОБОВ'ЯЗКОВО ДОДАЙ ТІЛЬКИ ЦЕЙ РЯДОК:
-                    ---
-                    СТРАВА: [назва] | ККАЛ: [число] | БІЛКИ: [число] | ЖИРИ: [число] | ВУГЛЕВОДИ: [число]
-                    """.trimIndent()
+                        "$languageInstruction\nТи дієтолог для $profileContext. Проаналізуй страву: $textToAnalyze. Дай пораду та факт.\n$jsonInstruction"
                     }
                     ScanMode.LABEL -> {
-                        """
-                    $languageInstruction
-                    Ти — експерт із харчової безпеки та технолог. 
-                    ЗАВДАННЯ:
-                    1. Проаналізуй фото етикетки або текст складу: "$textToAnalyze".
-                    2. Знайди всі харчові добавки (E-номери та хімічні назви).
-                    3. Для кожної вкажи: Назва (E-код) — Рівень небезпеки (Безпечно/Шкідливо/Сумнівно) — Коротке пояснення чому.
-                    4. Дай фінальний вердикт: "Рекомендовано", "Можна вживати рідко" або "Не рекомендовано".
-                    Пиши лаконічно, списком.
-                    """.trimIndent()
+                        "$languageInstruction\nТи технолог. Проаналізуй склад/етикетку. Знайди Е-добавки, оціни безпеку та дай вердикт.\n$jsonInstruction"
                     }
                 }
 
-                // Виклик моделі залишається майже таким самим
+                // 2. Викликаємо модель (результат кладемо в одну змінну)
                 val response = if (bitmapToAnalyze != null) {
                     val bitmapToSend = resizeBitmap(bitmapToAnalyze)
                     visionModel.generateContent(
@@ -444,17 +455,41 @@ fun DiaLensMainScreen(
                     textModel.generateContent("Аналізуй: $textToAnalyze \n\n $expertPrompt")
                 }
 
-                val responseText = response.text ?: ""
+                val rawResponse = response.text ?: ""
 
-                if (responseText.isNotBlank()) {
-                    resultText = responseText
+                if (rawResponse.isNotBlank()) {
+
+                    // 3. ПАРСИНГ
+                    val nutrientData = parseNutrientsFromJson(rawResponse)
+
+// Очищаємо текст від тегів для користувача
+                    resultText = rawResponse.replace(Regex("<JSON_DATA>.*?</JSON_DATA>", RegexOption.DOT_MATCHES_ALL), "").trim()
+
+// ОНОВЛЮЄМО STATE-ЗМІННІ (БЕЗ 'val'!)
+// Просто пишемо назву змінної і присвоюємо їй нове значення
+                    updateCalories((nutrientData["calories"] ?: 0.0).toInt().toString())
+                    updateProteins((nutrientData["protein"] ?: 0.0).toString())
+                    updateFats((nutrientData["fat"] ?: 0.0).toString())
+                    updateCarbs((nutrientData["carbs"] ?: 0.0).toString())
+                    updateResultText(rawResponse.replace(Regex("<JSON_DATA>.*?</JSON_DATA>", RegexOption.DOT_MATCHES_ALL), "").trim())
+
+// Якщо у тебе є змінна для цукру чи ХЕ, роби так само:
+// sugar = (nutrientData["sugar"] ?: 0.0).toString()
+
+// Якщо хочеш бачити ХЕ, можеш вивести його в лог або в окрему змінну
+                    val xeValue = (nutrientData["xe"] ?: 0.0).toString()
+                    Log.d("DiaLens", "Розраховано ХЕ: $xeValue")
                     additionalInfo = ""
                     capturedBitmap = null
                 }
                 keyboardController?.hide()
 
             } catch (e: Exception) {
-                resultText = context.resources.getString(R.string.error_api)
+                // Це виведе справжню причину в Logcat (червоним)
+                android.util.Log.e("DiaLensError", "ПРИЧИНА: ${e.message}", e)
+
+                // А це покаже конкретну помилку на екрані телефону
+                resultText = "Помилка: ${e.localizedMessage ?: "Невідома помилка сервера"}"
             } finally {
                 isLoading = false
             }
@@ -675,7 +710,15 @@ fun DiaLensMainScreen(
                     // 2. Визначаємо, що робити при натисканні на цю лупу
                     keyboardActions = KeyboardActions(
                         onSearch = {
-                            analyzeMeal(context, scanMode) // Запускаємо аналіз
+                            analyzeMeal(
+                                context = context,
+                                mode = scanMode,
+                                updateCalories = { calories = it },
+                                updateProteins = { proteins = it },
+                                updateFats = { fats = it },
+                                updateCarbs = { carbs = it },
+                                updateResultText = { resultText = it }
+                            )// Запускаємо аналіз
                             additionalInfo = ""  // 2. Очищуємо поле після запуску
                             keyboardController?.hide() // Ховаємо клавіатуру
                         }
@@ -927,7 +970,15 @@ fun DiaLensMainScreen(
         }
 // ТЕПЕР КНОПКА ЗНАХОДИТЬСЯ ПРЯМО В BOX
         Button(
-            onClick = { analyzeMeal(context, scanMode) },
+            onClick = { analyzeMeal(
+                context = context,
+                mode = scanMode,
+                updateCalories = { calories = it },
+                updateProteins = { proteins = it },
+                updateFats = { fats = it },
+                updateCarbs = { carbs = it },
+                updateResultText = { resultText = it }
+            ) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 16.dp)
@@ -1826,4 +1877,29 @@ private fun rotateImage(img: android.graphics.Bitmap, degree: Float): android.gr
     val rotatedImg = android.graphics.Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
     img.recycle()
     return rotatedImg
+}
+fun parseNutrientsFromJson(fullText: String): Map<String, Double> {
+    val nutrients = mutableMapOf(
+        "calories" to 0.0, "protein" to 0.0, "fat" to 0.0,
+        "carbs" to 0.0, "sugar" to 0.0, "xe" to 0.0
+    )
+
+    try {
+        // Шукаємо текст між тегами <JSON_DATA>
+        val jsonPattern = Regex("<JSON_DATA>(.*?)</JSON_DATA>", RegexOption.DOT_MATCHES_ALL)
+        val matchResult = jsonPattern.find(fullText)
+        val jsonString = matchResult?.groupValues?.get(1)?.trim()
+
+        if (jsonString != null) {
+            val jsonObject = org.json.JSONObject(jsonString)
+            nutrients.keys.forEach { key ->
+                if (jsonObject.has(key)) {
+                    nutrients[key] = jsonObject.optDouble(key, 0.0)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("Parser", "Помилка парсингу JSON: ${e.message}")
+    }
+    return nutrients
 }
